@@ -8,7 +8,8 @@
 ```
 GitHub Actions(每月 1 号 04:00 UTC)
    │
-   ├─ 下载 OSM PBF(BBBike / GeoFabrik)
+   ├─ 从 Geofabrik 下 china-latest.osm.pbf(~1.5 GB)
+   ├─ osmium 按 bbox 裁出指定区域(shanghai/beijing/... 各自硬编码 bbox)
    ├─ 用 tilemaker 切成 OpenMapTiles schema 矢量瓦片(tiles.mbtiles)
    ├─ 打包 tiles.mbtiles + style.json → pkg.zip
    ├─ 计算 SHA-256 → manifest.json
@@ -50,9 +51,8 @@ GitHub 不会因为 push 触发月度 cron,首次必须手动触发:
 1. 进仓库的 `Actions` Tab
 2. 左侧选 `Build & Publish Offline Map Tiles`
 3. 右上 `Run workflow`,参数:
-   - **region**:留空(默认 `shanghai`,~200 MB PBF,免费 runner 能跑完)
-   - **pbf_source**:`bbbike`
-   - **runner_size**:`small`
+   - **region**:留空(默认 `shanghai`)或下拉选 beijing/guangzhou/shenzhen/hangzhou/chengdu/guangdong/china
+   - **runner_size**:`small`(免费 ubuntu-latest;`large` 要绑卡 + Team 套餐)
 4. 跑 15–40 分钟(看区域),完成后看 `Releases` Tab,应该多了一个 tag 是当天日期的 release
 
 ### 3. 把客户端的 MANIFEST URL 切过去
@@ -95,22 +95,35 @@ buildConfigField(
 
 | 参数 | 选项 | 用途 |
 |---|---|---|
-| `region` | `shanghai` (默认) / `beijing` / `guangdong` / ... | BBBike 支持的城市名,首字母大写后拼到 URL |
-| `pbf_source` | `bbbike` (默认) / `geofabrik` | bbbike 适合单城市;geofabrik 拉整个 `china-latest.osm.pbf`(~1.5 GB) |
-| `runner_size` | `small` (默认) / `large` | small = `ubuntu-latest`(免费, 4c/16G/14GB 盘);large = `ubuntu-latest-16-cores`(付费, 整国必选) |
+| `region` | `shanghai`(默认)/`beijing`/`guangzhou`/`shenzhen`/`hangzhou`/`chengdu`/`guangdong`/`china` | 选哪个城市/省/全国,各自的 bbox 在 yml 里硬编码 |
+| `runner_size` | `small`(默认)/`large` | small = `ubuntu-latest`(免费, 4c/16G/14GB 盘);large = `ubuntu-latest-16-cores`(**付费 + 须 Team 套餐**,通常不必选) |
 
-**省钱组合**:`shanghai + bbbike + small` → 0 成本,15 分钟出包
-**全国包**:`* + geofabrik + large` → 每次约 $0.5,40–60 分钟,产出 ~400 MB pkg.zip
+**省钱组合**:`shanghai + small` → 0 成本,15–25 分钟出包
+**全国包**:`china + small` → 0 成本但风险:全国 PBF 1.5 GB,tilemaker 切全国大约要 12+ GB 内存,标准 runner 16 GB 内存**可能 OOM**。失败的话只能换 large。
+
+## 新增城市
+
+`build-tiles.yml` 的 `case "${REGION}"` 块加一行 bbox 即可。
+bbox 格式:`经度min,纬度min,经度max,纬度max`(WGS84)。可以从 https://bboxfinder.com/ 拉范围。
+
+例如加南京:
+```yaml
+nanjing)      BBOX="118.36,31.74,119.23,32.61" ;;
+```
+然后在 workflow_dispatch.inputs.region.options 里加上 `- nanjing` 让它出现在下拉里。
 
 ## 容量与时间预估
 
-| 区域 | PBF 大小 | tilemaker 时间 | pkg.zip | runner 推荐 |
-|---|---|---|---|---|
-| 单城市(上海/北京) | ~200 MB | 5–10 分钟 | 30–80 MB | small |
-| 单省(广东/江苏) | ~500 MB | 20–30 分钟 | 100–180 MB | small(临界) |
-| 全国 | ~1.5 GB | 60–90 分钟 | 350–450 MB | **large 必选** |
+无论选哪个 region,都会**先下整个 china-latest.osm.pbf(1.5 GB)**,然后 osmium 按 bbox 裁出指定区域。
+切片阶段才真正吃 CPU 和内存。
 
-> 免费 runner 单 job 上限 6 小时,全国包用 small 会 OOM/超时,所以必须 large。
+| 区域 | 下载耗时 | osmium 裁剪 | tilemaker 切片 | pkg.zip | 总耗时 |
+|---|---|---|---|---|---|
+| 单城市 | 3–5 分钟 | <1 分钟 | 5–10 分钟 | 30–80 MB | **~15 分钟** |
+| 单省 | 同上 | 1–2 分钟 | 20–30 分钟 | 100–180 MB | ~30 分钟 |
+| 全国 | 同上 | 跳过 | 60–90 分钟 | 350–450 MB | ~75 分钟,**OOM 风险** |
+
+> 免费 runner 单 job 上限 6 小时,但内存只有 16 GB。全国切片可能 OOM,失败就只能上 large。
 
 ## 故障排查
 
@@ -119,10 +132,14 @@ buildConfigField(
 工作流第一次跑时会从源码编译 tilemaker(`/tmp/tilemaker`),依赖 lua5.1 + boost + sqlite3 + libshp。
 依赖是 `apt-get install` 装的,几乎不会失败。如果失败,看 `Install tools` step 的日志,缺啥补啥。
 
-### 2. `wget: 404` 下载 PBF 失败
+### 2. `wget: 404` / 下载 PBF 失败
 
-BBBike 城市拼写要严格匹配,见 `https://download.bbbike.org/osm/bbbike/`。
-比如 `xian` 不是 `xi'an`,`hongkong` 不是 `hong-kong`。
+Geofabrik 的 `china-latest.osm.pbf` 偶尔会因为镜像同步、CDN 抖动 503。重试一次基本就过。
+如果反复失败,看 https://download.geofabrik.de/asia/china.html 确认 URL 有没有变。
+
+### 3. `osmium extract: unknown region`
+
+只支持 yml 里 case 块列出的 region。新增请见上面 "新增城市" 一节。
 
 ### 3. `pkg.zip` 找不到 `style.json`
 
