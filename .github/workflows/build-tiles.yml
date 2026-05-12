@@ -93,6 +93,50 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "RELEASED_AT=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
 
+      - name: Download shapefiles (coastline + Natural Earth landcover)
+        run: |
+          # tilemaker 的 OpenMapTiles config 引用了 4 个外部 shapefile,
+          # tilemaker repo 里不带,必须自己准备。
+          # 这一步约 1-3 分钟(都从大文件 CDN 拉)。
+
+          # 1. OSM 海岸线(~800 MB zip,解压后 ~1.5 GB)
+          echo "==> Downloading OSM water polygons..."
+          mkdir -p coastline
+          wget --tries=5 --retry-connrefused --waitretry=15 -q \
+            https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip \
+            -O /tmp/coastline.zip
+          unzip -q /tmp/coastline.zip -d /tmp/coastline-extract
+          # zip 内层目录名是 water-polygons-split-4326/,把 water_polygons.* 五件套搬出来
+          find /tmp/coastline-extract -maxdepth 3 -name 'water_polygons.*' -exec mv {} coastline/ \;
+          rm -rf /tmp/coastline.zip /tmp/coastline-extract
+          ls -lh coastline/
+
+          # 2. Natural Earth 三个 landcover 数据集
+          # name:kind 对,kind 是 cultural / physical 分类
+          for entry in \
+              "ne_10m_urban_areas:cultural" \
+              "ne_10m_glaciated_areas:physical" \
+              "ne_10m_antarctic_ice_shelves_polys:physical"; do
+            NAME="${entry%:*}"
+            KIND="${entry##*:}"
+            echo "==> Downloading ${NAME} (${KIND})..."
+            mkdir -p "landcover/${NAME}"
+            # 用 Natural Earth 官方 CDN,多次重试。nvkelso 镜像走 LFS,raw 拉不到,不当 fallback
+            wget --tries=5 --retry-connrefused --waitretry=30 --timeout=60 -q \
+              "https://naciscdn.org/naturalearth/10m/${KIND}/${NAME}.zip" \
+              -O "/tmp/${NAME}.zip"
+            # 先解到临时目录,再 find 把五件套(.shp/.dbf/.shx/.prj/.cpg)挪到目标位置
+            # 这样无论 zip 内层是平的还是带子目录都对得上 config 引用的相对路径
+            mkdir -p "/tmp/${NAME}-extract"
+            unzip -q -o "/tmp/${NAME}.zip" -d "/tmp/${NAME}-extract"
+            find "/tmp/${NAME}-extract" -name "${NAME}.*" -exec mv {} "landcover/${NAME}/" \;
+            rm -rf "/tmp/${NAME}.zip" "/tmp/${NAME}-extract"
+            echo "    → $(ls landcover/${NAME}/ | wc -l) files in landcover/${NAME}/"
+          done
+          echo "==> Landcover layout:"
+          ls -la landcover/
+          ls -la landcover/ne_10m_urban_areas/
+
       - name: Compute bbox & download PBF (Geofabrik china-latest)
         run: |
           # 区域 → 边界框(经度 min, 纬度 min, 经度 max, 纬度 max)
@@ -114,7 +158,8 @@ jobs:
           echo "Using BBOX: ${BBOX}"
 
           echo "Downloading china-latest.osm.pbf from Geofabrik..."
-          wget -q https://download.geofabrik.de/asia/china-latest.osm.pbf -O china.osm.pbf
+          wget --tries=5 --retry-connrefused --waitretry=15 -q \
+            https://download.geofabrik.de/asia/china-latest.osm.pbf -O china.osm.pbf
           ls -lh china.osm.pbf
 
           if [ "${REGION}" = "china" ]; then
