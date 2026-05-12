@@ -93,11 +93,12 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "RELEASED_AT=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
 
-      - name: Download & crop PBF (Geofabrik china-latest + osmium bbox)
+      - name: Compute bbox & download PBF (Geofabrik china-latest)
         run: |
           # 区域 → 边界框(经度 min, 纬度 min, 经度 max, 纬度 max)
+          # 全国用大致领土外接矩形,tilemaker 读 shapefile 需要 bbox 来界定海岸线
           case "${REGION}" in
-            china)        BBOX="" ;;  # 全国,不裁剪
+            china)        BBOX="73.0,18.0,135.0,54.0" ;;
             shanghai)     BBOX="120.85,30.67,122.20,31.88" ;;
             beijing)      BBOX="115.42,39.44,117.51,41.06" ;;
             guangzhou)    BBOX="112.95,22.51,114.06,23.93" ;;
@@ -108,11 +109,15 @@ jobs:
             *)            echo "未知区域: ${REGION}"; exit 1 ;;
           esac
 
+          # 把 BBOX 传到后续 step
+          echo "BBOX=${BBOX}" >> $GITHUB_ENV
+          echo "Using BBOX: ${BBOX}"
+
           echo "Downloading china-latest.osm.pbf from Geofabrik..."
           wget -q https://download.geofabrik.de/asia/china-latest.osm.pbf -O china.osm.pbf
           ls -lh china.osm.pbf
 
-          if [ -z "${BBOX}" ]; then
+          if [ "${REGION}" = "china" ]; then
             mv china.osm.pbf region.osm.pbf
             echo "全国包,不裁剪"
           else
@@ -124,10 +129,12 @@ jobs:
 
       - name: Slice tiles (tilemaker → OpenMapTiles schema)
         run: |
-          # tilemaker 自带 OpenMapTiles schema 配置
+          # tilemaker 必须显式传 --bbox,否则 shapefile 读不进来
+          # (Geofabrik PBF 自带的 bbox header tilemaker 不主动读取)
           tilemaker \
             --input region.osm.pbf \
             --output tiles.mbtiles \
+            --bbox "${BBOX}" \
             --config /tmp/tilemaker/resources/config-openmaptiles.json \
             --process /tmp/tilemaker/resources/process-openmaptiles.lua
           ls -lh tiles.mbtiles
