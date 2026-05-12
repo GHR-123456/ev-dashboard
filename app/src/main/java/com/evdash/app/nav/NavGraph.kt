@@ -74,9 +74,11 @@ fun EvNavGraph(navController: NavHostController) {
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    ) { _ ->
+    ) { padding ->
         Row(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
         ) {
             // Left sidebar navigation
             val showLabels = Adaptive.showNavLabels

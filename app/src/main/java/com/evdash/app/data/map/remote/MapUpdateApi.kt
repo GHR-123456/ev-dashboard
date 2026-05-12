@@ -55,8 +55,9 @@ class MapUpdateApi @Inject constructor(
             val body = resp.body ?: throw IOException("download empty body")
 
             val appending = existing > 0L && resp.code == 206
+            val bodyBytes = body.contentLength().takeIf { it > 0L }
             val total = resp.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull()
-                ?: (existing + body.contentLength()).takeIf { it > 0L }
+                ?: bodyBytes?.let { if (appending) existing + it else it }
                 ?: -1L
 
             body.byteStream().use { input ->

@@ -78,7 +78,7 @@ class MapRepository @Inject constructor(
     /** 用户在 Settings 页点"立即检查更新"时调用。允许 metered 网络。 */
     fun enqueueImmediateUpdate() {
         val req = OneTimeWorkRequestBuilder<MapUpdateWorker>()
-            .setConstraints(noNetworkConstraint())
+            .setConstraints(anyNetworkConstraint())
             .build()
         workManager.enqueueUniqueWork(WORK_UPDATE_ONESHOT, ExistingWorkPolicy.REPLACE, req)
     }
@@ -91,7 +91,7 @@ class MapRepository @Inject constructor(
      */
     fun enqueueAutoFirstDownload() {
         val req = OneTimeWorkRequestBuilder<MapUpdateWorker>()
-            .setConstraints(meteredOkConstraint())
+            .setConstraints(wifiOnlyConstraint())
             .build()
         workManager.enqueueUniqueWork(WORK_UPDATE_ONESHOT, ExistingWorkPolicy.KEEP, req)
     }
@@ -99,7 +99,7 @@ class MapRepository @Inject constructor(
     /** App 启动时调用一次:把 7 天周期任务挂到 WorkManager(已有则 KEEP)。 */
     fun ensurePeriodicUpdate() {
         val req = PeriodicWorkRequestBuilder<MapUpdateWorker>(7, TimeUnit.DAYS)
-            .setConstraints(meteredOkConstraint())
+            .setConstraints(wifiOnlyConstraint())
             .build()
         workManager.enqueueUniquePeriodicWork(
             WORK_UPDATE_PERIODIC,
@@ -132,11 +132,11 @@ class MapRepository @Inject constructor(
         }
     }
 
-    private fun noNetworkConstraint(): Constraints = Constraints.Builder()
+    private fun anyNetworkConstraint(): Constraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
 
-    private fun meteredOkConstraint(): Constraints = Constraints.Builder()
+    private fun wifiOnlyConstraint(): Constraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.UNMETERED)
         .setRequiresBatteryNotLow(true)
         .setRequiresStorageNotLow(true)
