@@ -19,19 +19,21 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: '区域(默认 shanghai,可选 beijing/guangdong/...)'
+        description: '区域(默认 shanghai)'
         required: false
         default: 'shanghai'
-      pbf_source:
-        description: 'PBF 数据源(bbbike 适合单城市,geofabrik 适合全国但更大)'
-        required: false
-        default: 'bbbike'
         type: choice
         options:
-          - bbbike
-          - geofabrik
+          - shanghai
+          - beijing
+          - guangzhou
+          - shenzhen
+          - hangzhou
+          - chengdu
+          - guangdong
+          - china
       runner_size:
-        description: 'Runner 规格(free tier 选 small,全国切片选 large)'
+        description: 'Runner 规格(免费 small / 付费 large,large 需绑卡 + Team 套餐)'
         required: false
         default: 'small'
         type: choice
@@ -41,7 +43,6 @@ on:
 
 env:
   REGION: ${{ github.event.inputs.region || 'shanghai' }}
-  PBF_SOURCE: ${{ github.event.inputs.pbf_source || 'bbbike' }}
   # tilemaker 二进制版本,跟随官方 release tag
   TILEMAKER_VERSION: v3.0.0
 
@@ -92,18 +93,33 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "RELEASED_AT=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
 
-      - name: Download PBF
+      - name: Download & crop PBF (Geofabrik china-latest + osmium bbox)
         run: |
-          if [ "${PBF_SOURCE}" = "geofabrik" ]; then
-            # GeoFabrik:适合全国 / 大区域
-            URL="https://download.geofabrik.de/asia/china-latest.osm.pbf"
+          # 区域 → 边界框(经度 min, 纬度 min, 经度 max, 纬度 max)
+          case "${REGION}" in
+            china)        BBOX="" ;;  # 全国,不裁剪
+            shanghai)     BBOX="120.85,30.67,122.20,31.88" ;;
+            beijing)      BBOX="115.42,39.44,117.51,41.06" ;;
+            guangzhou)    BBOX="112.95,22.51,114.06,23.93" ;;
+            shenzhen)     BBOX="113.75,22.40,114.65,22.87" ;;
+            hangzhou)     BBOX="118.34,29.18,120.71,30.57" ;;
+            chengdu)      BBOX="103.00,30.10,104.88,31.43" ;;
+            guangdong)    BBOX="109.66,20.13,117.19,25.52" ;;
+            *)            echo "未知区域: ${REGION}"; exit 1 ;;
+          esac
+
+          echo "Downloading china-latest.osm.pbf from Geofabrik..."
+          wget -q https://download.geofabrik.de/asia/china-latest.osm.pbf -O china.osm.pbf
+          ls -lh china.osm.pbf
+
+          if [ -z "${BBOX}" ]; then
+            mv china.osm.pbf region.osm.pbf
+            echo "全国包,不裁剪"
           else
-            # BBBike:适合单城市,几十~几百 MB
-            CITY=$(echo "${REGION}" | sed 's/.*/\u&/')  # 首字母大写
-            URL="https://download.bbbike.org/osm/bbbike/${CITY}/${CITY}.osm.pbf"
+            echo "Cropping to ${REGION}: bbox=${BBOX}"
+            osmium extract -b "${BBOX}" china.osm.pbf -o region.osm.pbf
+            rm china.osm.pbf
           fi
-          echo "Downloading from: ${URL}"
-          wget -q "${URL}" -O region.osm.pbf
           ls -lh region.osm.pbf
 
       - name: Slice tiles (tilemaker → OpenMapTiles schema)
@@ -161,7 +177,7 @@ jobs:
           body: |
             自动构建的离线地图包。
 
-            **区域**: ${{ env.REGION }}  ·  **数据源**: ${{ env.PBF_SOURCE }}
+            **区域**: ${{ env.REGION }}  ·  **数据源**: Geofabrik china-latest + osmium bbox
             **SHA-256**: `${{ steps.pack.outputs.SHA256 }}`
             **Size**: ${{ steps.pack.outputs.SIZE }} bytes
 
