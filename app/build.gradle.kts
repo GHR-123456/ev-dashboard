@@ -21,7 +21,7 @@ android {
         buildConfigField(
             "String",
             "MAP_MANIFEST_URL",
-            "\"https://cdn.example.com/maps/cn/manifest.json\""
+            "\"https://github.com/GHR-123456/ev-dashboard/releases/latest/download/manifest.json\""
         )
     }
 
