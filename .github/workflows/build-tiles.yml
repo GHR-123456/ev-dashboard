@@ -71,7 +71,12 @@ jobs:
       - name: Install tools (tilemaker + osmium + zip)
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q wget zip jq osmium-tool lua5.1 liblua5.1-0-dev libsqlite3-dev libshp-dev libboost-all-dev
+          sudo apt-get install -y -q \
+            wget zip jq osmium-tool \
+            build-essential cmake \
+            lua5.1 liblua5.1-0-dev \
+            libsqlite3-dev libshp-dev libboost-all-dev \
+            rapidjson-dev libprotobuf-dev protobuf-compiler zlib1g-dev
 
           # tilemaker:从源码编译(apt 版本太旧不支持新 schema)
           git clone --depth 1 --branch "${TILEMAKER_VERSION}" https://github.com/systemed/tilemaker.git /tmp/tilemaker
