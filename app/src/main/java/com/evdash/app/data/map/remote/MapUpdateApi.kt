@@ -47,7 +47,11 @@ class MapUpdateApi @Inject constructor(
         destPart.parentFile?.mkdirs()
         val existing = if (destPart.exists()) destPart.length() else 0L
 
-        val reqBuilder = Request.Builder().url(packageUrl).get()
+        // manifest 里的 packageUrl 是 github 原站直链,但国内访问被 GFW 阻断,
+        // 这里统一套上 BuildConfig.MAP_MIRROR_PREFIX(ghproxy.com)走反向代理。
+        val effectiveUrl = applyMirror(packageUrl)
+
+        val reqBuilder = Request.Builder().url(effectiveUrl).get()
         if (existing > 0L) reqBuilder.header("Range", "bytes=$existing-")
 
         client.newCall(reqBuilder.build()).execute().use { resp ->
@@ -79,5 +83,23 @@ class MapUpdateApi @Inject constructor(
 
     private companion object {
         const val BUFFER_SIZE = 64 * 1024
+
+        /**
+         * 把 github.com 直链套上 [BuildConfig.MAP_MIRROR_PREFIX] 反向代理前缀。
+         *
+         * - 已经带镜像前缀的 URL 原样返回(幂等);
+         * - 非 github.com 的 URL 原样返回(以后切自托管 CDN 时不影响);
+         * - 镜像前缀为空字符串时直接返回(留个开关方便本地测试)。
+         */
+        fun applyMirror(url: String): String {
+            val prefix = BuildConfig.MAP_MIRROR_PREFIX
+            if (prefix.isBlank()) return url
+            if (url.startsWith(prefix)) return url
+            if (!url.startsWith("https://github.com/") &&
+                !url.startsWith("https://raw.githubusercontent.com/") &&
+                !url.startsWith("https://objects.githubusercontent.com/")
+            ) return url
+            return prefix + url
+        }
     }
 }

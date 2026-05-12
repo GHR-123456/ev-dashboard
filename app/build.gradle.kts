@@ -18,10 +18,18 @@ android {
         versionCode = 1
         versionName = "0.1.0-mvp1"
 
+        // 国内网络访问 github.com 经常被 GFW 阻断 (port 443 timeout),
+        // 这里统一走 ghproxy.com HTTP 反向代理。前缀单独抽出来,
+        // 便于在 MapUpdateApi 里给 manifest 里返回的 packageUrl 也套上同一前缀。
+        buildConfigField(
+            "String",
+            "MAP_MIRROR_PREFIX",
+            "\"https://ghproxy.com/\""
+        )
         buildConfigField(
             "String",
             "MAP_MANIFEST_URL",
-            "\"https://github.com/GHR-123456/ev-dashboard/releases/latest/download/manifest.json\""
+            "\"https://ghproxy.com/https://github.com/GHR-123456/ev-dashboard/releases/latest/download/manifest.json\""
         )
     }
 
