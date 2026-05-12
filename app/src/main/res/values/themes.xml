@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Theme.EvDashboard" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FFE8F4FC</item>
+        <item name="android:colorBackground">#FFE8F4FC</item>
+        <item name="android:statusBarColor" tools:targetApi="l">@android:color/transparent</item>
+        <item name="android:navigationBarColor" tools:targetApi="l">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+    </style>
+
+    <style name="Theme.EvDashboard.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#FFE8F4FC</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.EvDashboard</item>
+    </style>
+
+</resources>

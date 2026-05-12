@@ -1,0 +1,168 @@
+name: Build & Publish Offline Map Tiles
+
+# 自动切片 + 发布离线地图包到 GitHub Release。
+# - 每月 1 号自动跑
+# - 也可手动触发(workflow_dispatch),支持选择区域 / 缩放级别
+#
+# 工作机制:
+# 1. 下载指定区域的 OSM PBF
+# 2. 用 tilemaker 切成 OpenMapTiles schema 兼容的矢量瓦片(mbtiles)
+# 3. 打包 mbtiles + style.json 为 pkg.zip
+# 4. 算 SHA-256,生成 manifest.json
+# 5. 推 release(tag = 日期)
+#
+# Android 端:WorkManager 每 7 天后台拉一次 latest manifest,发现新版本就自动下载切槽。
+
+on:
+  schedule:
+    - cron: '0 4 1 * *'  # 每月 1 号 04:00 UTC(北京时间 12:00)
+  workflow_dispatch:
+    inputs:
+      region:
+        description: '区域(默认 shanghai,可选 beijing/guangdong/...)'
+        required: false
+        default: 'shanghai'
+      pbf_source:
+        description: 'PBF 数据源(bbbike 适合单城市,geofabrik 适合全国但更大)'
+        required: false
+        default: 'bbbike'
+        type: choice
+        options:
+          - bbbike
+          - geofabrik
+      runner_size:
+        description: 'Runner 规格(free tier 选 small,全国切片选 large)'
+        required: false
+        default: 'small'
+        type: choice
+        options:
+          - small
+          - large
+
+env:
+  REGION: ${{ github.event.inputs.region || 'shanghai' }}
+  PBF_SOURCE: ${{ github.event.inputs.pbf_source || 'bbbike' }}
+  # tilemaker 二进制版本,跟随官方 release tag
+  TILEMAKER_VERSION: v3.0.0
+
+jobs:
+  build:
+    name: Slice ${{ github.event.inputs.region || 'shanghai' }}
+    runs-on: ${{ github.event.inputs.runner_size == 'large' && 'ubuntu-latest-16-cores' || 'ubuntu-latest' }}
+    timeout-minutes: 350
+    permissions:
+      contents: write  # 创建 release 需要
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space (释放预装软件腾出 ~30 GB)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Install tools (tilemaker + osmium + zip)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q wget zip jq osmium-tool lua5.1 liblua5.1-0-dev libsqlite3-dev libshp-dev libboost-all-dev
+
+          # tilemaker:从源码编译(apt 版本太旧不支持新 schema)
+          git clone --depth 1 --branch "${TILEMAKER_VERSION}" https://github.com/systemed/tilemaker.git /tmp/tilemaker
+          cd /tmp/tilemaker
+          make -j$(nproc)
+          sudo make install
+          tilemaker --help | head -3
+
+      - name: Compute version
+        id: version
+        run: |
+          VERSION=$(date -u +%Y.%m.%d)
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "RELEASED_AT=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
+
+      - name: Download PBF
+        run: |
+          if [ "${PBF_SOURCE}" = "geofabrik" ]; then
+            # GeoFabrik:适合全国 / 大区域
+            URL="https://download.geofabrik.de/asia/china-latest.osm.pbf"
+          else
+            # BBBike:适合单城市,几十~几百 MB
+            CITY=$(echo "${REGION}" | sed 's/.*/\u&/')  # 首字母大写
+            URL="https://download.bbbike.org/osm/bbbike/${CITY}/${CITY}.osm.pbf"
+          fi
+          echo "Downloading from: ${URL}"
+          wget -q "${URL}" -O region.osm.pbf
+          ls -lh region.osm.pbf
+
+      - name: Slice tiles (tilemaker → OpenMapTiles schema)
+        run: |
+          # tilemaker 自带 OpenMapTiles schema 配置
+          tilemaker \
+            --input region.osm.pbf \
+            --output tiles.mbtiles \
+            --config /tmp/tilemaker/resources/config-openmaptiles.json \
+            --process /tmp/tilemaker/resources/process-openmaptiles.lua
+          ls -lh tiles.mbtiles
+
+      - name: Copy style.json from repo
+        run: |
+          cp app/src/main/assets/maps/style.json style.json
+          ls -lh style.json
+
+      - name: Pack pkg.zip + checksum
+        id: pack
+        run: |
+          zip -9 pkg.zip tiles.mbtiles style.json
+          SHA256=$(sha256sum pkg.zip | cut -d' ' -f1)
+          SIZE=$(stat -c%s pkg.zip)
+          echo "SHA256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "SIZE=${SIZE}" >> $GITHUB_OUTPUT
+          ls -lh pkg.zip
+          echo "SHA-256: ${SHA256}"
+          echo "Size:    ${SIZE} bytes"
+
+      - name: Generate manifest.json
+        run: |
+          jq -n \
+            --arg ver "${{ steps.version.outputs.VERSION }}" \
+            --arg url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/pkg.zip" \
+            --arg sha "${{ steps.pack.outputs.SHA256 }}" \
+            --arg released "${{ steps.version.outputs.RELEASED_AT }}" \
+            --arg region "${{ env.REGION }}" \
+            --argjson size "${{ steps.pack.outputs.SIZE }}" \
+            '{
+              latestVersion: $ver,
+              minAppVersion: 1,
+              packageUrl: $url,
+              sizeBytes: $size,
+              sha256: $sha,
+              releasedAt: $released,
+              notes: ("Auto-built " + $region + " tiles")
+            }' > manifest.json
+          cat manifest.json
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: 'Map ${{ steps.version.outputs.VERSION }} (${{ env.REGION }})'
+          body: |
+            自动构建的离线地图包。
+
+            **区域**: ${{ env.REGION }}  ·  **数据源**: ${{ env.PBF_SOURCE }}
+            **SHA-256**: `${{ steps.pack.outputs.SHA256 }}`
+            **Size**: ${{ steps.pack.outputs.SIZE }} bytes
+
+            车机端 App 在下次后台检查时(7 天周期)会自动下载本版本。
+            想立刻看到效果可以在 Settings → 离线地图包 → 点"立即检查"。
+          files: |
+            pkg.zip
+            manifest.json
+          fail_on_unmatched_files: true
